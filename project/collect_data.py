@@ -1,13 +1,14 @@
 import cv2
 import mediapipe as mp
 import csv
-import os  #  Added to check if file exists
+import os
 
 # Initialize MediaPipe Hands
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.7, max_num_hands=2)  # 🔧 max_num_hands=2
+hands = mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.7, max_num_hands=2)
+mp_drawing = mp.solutions.drawing_utils
 
-# Gesture Mapping (Key: Gesture)
+# Gesture Mapping
 GESTURE_MAP = {
     ord('1'): 'point',
     ord('2'): 'click',
@@ -15,24 +16,24 @@ GESTURE_MAP = {
     ord('4'): 'drag',
     ord('5'): 'scroll_up',
     ord('6'): 'scroll_down',
-    ord('7'): 'screenshot'  #  Added screenshot gesture
+    ord('7'): 'screenshot'
 }
-current_gesture = 'point'  # Default gesture
+current_gesture = 'point'
 
-#  Generate column headers dynamically for 2 hands (h0, h1)
+# Generate headers for CSV
 def generate_headers():
     return ['label'] + [
         f'{axis}{i}_h{h}' for h in range(2) for i in range(21) for axis in ['x', 'y', 'z']
     ]
 
-#  Write headers only if file doesn't exist
+# CSV setup
 csv_file = 'gesture_data.csv'
 if not os.path.exists(csv_file):
     with open(csv_file, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(generate_headers())
 
-# Start video capture
+# Start video
 cap = cv2.VideoCapture(0)
 print("""
 Gesture Controls:
@@ -46,25 +47,36 @@ while cap.isOpened():
     if not ret:
         break
 
-    frame = cv2.flip(frame, 1)  # Mirror the frame
+    frame = cv2.flip(frame, 1)
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands.process(rgb_frame)
 
-    # Display current gesture
+    # Overlay current gesture
     cv2.putText(frame, f'Gesture: {current_gesture}', (20, 50),
-               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-    cv2.putText(frame, 'Press 1-7 to change gesture', (20, 100),  # 🔧 Updated to 1-7
-               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    cv2.putText(frame, 'Press 1-7 to change gesture', (20, 100),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-    # Draw hand landmarks if detected
-    if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks:
-            mp.solutions.drawing_utils.draw_landmarks(
-                frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+    # Process hands
+    handedness_info = []
+    hand_data = {}
+
+    if results.multi_hand_landmarks and results.multi_handedness:
+        for idx, hand_handedness in enumerate(results.multi_handedness):
+            label = hand_handedness.classification[0].label  # 'Left' or 'Right'
+            handedness_info.append(label)
+            hand_data[label] = results.multi_hand_landmarks[idx]
+            mp_drawing.draw_landmarks(frame, results.multi_hand_landmarks[idx], mp_hands.HAND_CONNECTIONS)
+
+    # Show hand type on screen
+    if handedness_info:
+        hand_label_text = " & ".join(handedness_info)
+        cv2.putText(frame, f'Hand(s): {hand_label_text}', (20, 140),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
     cv2.imshow('Gesture Data Collection', frame)
 
-    # Keyboard controls
+    # Handle key input
     key = cv2.waitKey(1)
     if key in GESTURE_MAP:
         current_gesture = GESTURE_MAP[key]
@@ -77,18 +89,18 @@ while cap.isOpened():
                 continue
 
             row = [current_gesture]
-            for i in range(2):  # 🔧 Loop through both hands
-                if i < num_hands:
-                    hand_landmarks = results.multi_hand_landmarks[i]
-                    row.extend([lm.x for lm in hand_landmarks.landmark])
-                    row.extend([lm.y for lm in hand_landmarks.landmark])
-                    row.extend([lm.z for lm in hand_landmarks.landmark])
+            for expected in ['Right', 'Left']:
+                if expected in hand_data:
+                    lm = hand_data[expected]
+                    row.extend([pt.x for pt in lm.landmark])
+                    row.extend([pt.y for pt in lm.landmark])
+                    row.extend([pt.z for pt in lm.landmark])
                 else:
-                    row.extend([0.0] * 63)  # 🔧 Pad with zeros if hand missing
+                    row.extend([0.0] * 63)  # pad
 
             with open(csv_file, 'a', newline='') as f:
                 csv.writer(f).writerow(row)
-            print(f"Saved sample for {current_gesture}")
+            print(f"Saved sample for {current_gesture} | Hands: {handedness_info}")
     elif key == ord('q'):
         break
 
